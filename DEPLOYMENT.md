@@ -17,8 +17,9 @@ EventBridge (monthly cron)
         │  • Playwright + headless Chromium
         │  • Tesseract OCR (CAPTCHA)
         │  • Pillow (image collation)
-        ▼
-   S3 bucket
+        │  • Reads account numbers from Secrets Manager
+        ▼                           ▼
+   S3 bucket                  SES → email
      bills/YYYY-MM/receipt_all.png   ← collated A4 print page
      bills/YYYY-MM/bill_<acct>.png   ← individual bill screenshots
 ```
@@ -91,7 +92,29 @@ aws s3api put-bucket-lifecycle-configuration \
 
 ---
 
-## Step 3 — Create IAM Role for Lambda
+## Step 3 — Store Account Numbers in Secrets Manager
+
+Account numbers are stored as a secret so they never appear in code or
+environment variables in plain sight.
+
+```bash
+aws secretsmanager create-secret \
+  --name cpdcl/account-numbers \
+  --region $AWS_REGION \
+  --secret-string '{"account_numbers": ["6423244002992", "6423244145358", "6423244217704"]}'
+```
+
+To update account numbers later:
+```bash
+aws secretsmanager update-secret \
+  --secret-id cpdcl/account-numbers \
+  --region $AWS_REGION \
+  --secret-string '{"account_numbers": ["NEW1", "NEW2", "NEW3"]}'
+```
+
+---
+
+## Step 4 — Create IAM Role for Lambda
 
 ```bash
 # Trust policy
@@ -110,7 +133,7 @@ aws iam create-role \
   --role-name bills-vja-lambda-role \
   --assume-role-policy-document file:///tmp/trust.json
 
-# Permission policy (replace YOUR-BUCKET-NAME)
+# Permission policy
 cat > /tmp/policy.json <<EOF
 {
   "Version": "2012-10-17",
@@ -126,6 +149,12 @@ cat > /tmp/policy.json <<EOF
       "Effect": "Allow",
       "Action": "ses:SendRawEmail",
       "Resource": "*"
+    },
+    {
+      "Sid": "SecretsRead",
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:${AWS_REGION}:${AWS_ACCOUNT_ID}:secret:cpdcl/account-numbers*"
     },
     {
       "Sid": "Logs",
@@ -148,7 +177,7 @@ aws iam put-role-policy \
 
 ---
 
-## Step 3 — Create ECR Repository & Push Image
+## Step 5 — Create ECR Repository & Push Image
 
 ```bash
 # Create repository
@@ -177,7 +206,7 @@ docker push \
 
 ---
 
-## Step 4 — Create Lambda Function
+## Step 6 — Create Lambda Function
 
 ```bash
 aws lambda create-function \
@@ -197,20 +226,18 @@ aws lambda create-function \
 |----------|---------|-------------|
 | `S3_BUCKET` | *(required)* | S3 bucket name |
 | `EMAIL_TO` | *(required)* | Recipient email address (must be SES-verified) |
+| `ACCOUNTS_SECRET_NAME` | `cpdcl/account-numbers` | Secrets Manager secret name for account numbers |
 | `EMAIL_FROM` | same as `EMAIL_TO` | Sender address if different |
 | `S3_PREFIX` | `bills` | Key prefix inside the bucket |
-| `ACCOUNT_NUMBERS` | hardcoded 3 accounts | Comma-separated list to override |
+| `ACCOUNT_NUMBERS` | — | Comma-separated fallback if Secrets Manager is not used |
 
-To add or update account numbers later:
-```bash
-aws lambda update-function-configuration \
-  --function-name bills-vja \
-  --environment "Variables={S3_BUCKET=$S3_BUCKET,ACCOUNT_NUMBERS=6423244002992,6423244145358,6423244217704}"
-```
+> Account numbers are loaded from Secrets Manager by default. The
+> `ACCOUNT_NUMBERS` env var is only used as a fallback if the secret is
+> inaccessible.
 
 ---
 
-## Step 5 — Schedule Monthly with EventBridge
+## Step 7 — Schedule Monthly with EventBridge
 
 Runs at 09:00 UTC on the 1st of every month:
 
@@ -240,7 +267,7 @@ aws events put-targets \
 
 ---
 
-## Step 6 — Test Manually
+## Step 8 — Test Manually
 
 ```bash
 aws lambda invoke \
@@ -269,7 +296,7 @@ open ~/receipt_all.png   # macOS; use xdg-open on Linux
 
 ---
 
-## Step 7 — Update Image (Future Deploys)
+## Step 9 — Update Image (Future Deploys)
 
 ```bash
 docker build -t bills-vja ./lambda
@@ -298,8 +325,12 @@ All prices are AWS us-east-1 as of 2026. **Actual bill will be near $0.**
 | **EventBridge** | 1 scheduled event/month | Free (first 14M/month free) | $0.00 |
 | **Data transfer** | ~5 MB outbound (portal pages) | Free (first 100 GB/month) | $0.00 |
 | **Bedrock / AI API** | 0 — uses Tesseract OCR | — | **$0.00** |
+| **Secrets Manager** | 1 secret, 1 API call/month | $0.40/secret/month + negligible API | ~$0.40 |
 
-**Total per run: ~$0.16/month** (almost entirely ECR image storage)
+**Total per run: ~$0.56/month**
+
+> To eliminate Secrets Manager cost, skip Step 3 and pass account numbers
+> via the `ACCOUNT_NUMBERS` Lambda env var instead. Cost drops back to ~$0.16/month.
 
 > To eliminate ECR cost (~$0.15), you can delete and re-push the image just
 > before each run, keeping the stored image size near zero between runs.

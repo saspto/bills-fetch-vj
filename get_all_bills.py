@@ -4,6 +4,7 @@ screenshot each one, then collate all 3 into a single A4-sized printable image.
 
 CAPTCHA is solved with Tesseract OCR (free, no cloud API needed).
 """
+import os
 import re
 import time
 from pathlib import Path
@@ -14,7 +15,17 @@ from playwright.sync_api import sync_playwright
 
 URL = "https://payments.billdesk.com/MercOnline/CPDCLAPPGController"
 OUT_DIR = Path("/workshop/bills-vja")
-ACCOUNTS = ["6423244002992", "6423244145358", "6423244217704"]
+
+
+def load_accounts() -> list[str]:
+    """Load account numbers from ACCOUNT_NUMBERS env var (comma-separated)."""
+    raw = os.environ.get("ACCOUNT_NUMBERS", "")
+    accounts = [a.strip() for a in raw.split(",") if a.strip()]
+    if not accounts:
+        raise ValueError("ACCOUNT_NUMBERS environment variable is not set. "
+                         "Set it as a comma-separated list, e.g.: "
+                         "export ACCOUNT_NUMBERS=1234,5678,9012")
+    return accounts
 
 TESS_CONFIG = "--psm 8 --oem 3 -c tessedit_char_whitelist=0123456789"
 
@@ -126,14 +137,19 @@ def collate_images(image_paths: list[Path], output_path: Path):
 
 
 def main():
+    accounts = load_accounts()
     screenshots = []
-    for account in ACCOUNTS:
+    for account in accounts:
         print(f"\nFetching bill for account: {account}")
         out = OUT_DIR / f"bill_{account}.png"
         if fetch_bill_screenshot(account, out):
             screenshots.append(out)
         else:
             print(f"  FAILED to fetch bill for {account}")
+
+    if len(screenshots) < len(accounts):
+        missing = len(accounts) - len(screenshots)
+        print(f"  WARNING: {missing} account(s) failed")
 
     if screenshots:
         print(f"\nCollating {len(screenshots)} screenshot(s) into A4 page...")
