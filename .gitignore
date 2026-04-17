@@ -1,0 +1,7 @@
+# Debug/intermediate screenshots
+debug_*.png
+# Probe/scrape helper scripts
+probe_reqids.py
+scrape_js.py
+get_detail_js.py
+get_receipt.py
