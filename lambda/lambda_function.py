@@ -12,9 +12,8 @@ ACCOUNT_NUMBERS environment variable (comma-separated fallback).
 Environment variables:
   S3_BUCKET            (required) — destination bucket
   EMAIL_TO             (required) — recipient address (must be SES-verified in sandbox)
-  ACCOUNTS_SECRET_NAME (optional) — Secrets Manager secret name, default "cpdcl/account-numbers"
+  ACCOUNT_NUMBERS      (required) — comma-separated list of account numbers
   EMAIL_FROM           (optional) — sender address, defaults to EMAIL_TO
-  ACCOUNT_NUMBERS      (optional) — comma-separated fallback if Secrets Manager not used
   S3_PREFIX            (optional) — key prefix, default "bills"
 """
 
@@ -31,7 +30,6 @@ from io import BytesIO
 from pathlib import Path
 
 import boto3
-from botocore.exceptions import ClientError
 import pytesseract
 from PIL import Image, ImageFilter
 from playwright.sync_api import sync_playwright
@@ -41,38 +39,18 @@ logger.setLevel(logging.INFO)
 
 URL = "https://payments.billdesk.com/MercOnline/CPDCLAPPGController"
 
-S3_BUCKET            = os.environ.get("S3_BUCKET", "")
-S3_PREFIX            = os.environ.get("S3_PREFIX", "bills")
-EMAIL_TO             = os.environ.get("EMAIL_TO", "")
-EMAIL_FROM           = os.environ.get("EMAIL_FROM", "") or EMAIL_TO
-ACCOUNTS_SECRET_NAME = os.environ.get("ACCOUNTS_SECRET_NAME", "cpdcl/account-numbers")
+S3_BUCKET  = os.environ.get("S3_BUCKET", "")
+S3_PREFIX  = os.environ.get("S3_PREFIX", "bills")
+EMAIL_TO   = os.environ.get("EMAIL_TO", "")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "") or EMAIL_TO
 
 
 def load_accounts() -> list:
-    """Load account numbers from Secrets Manager, falling back to env var."""
-    # 1. Try Secrets Manager
-    try:
-        sm = boto3.client("secretsmanager")
-        secret = sm.get_secret_value(SecretId=ACCOUNTS_SECRET_NAME)
-        data = json.loads(secret["SecretString"])
-        accounts = [a.strip() for a in data["account_numbers"] if a.strip()]
-        logger.info("Loaded %d accounts from Secrets Manager (%s)", len(accounts), ACCOUNTS_SECRET_NAME)
-        return accounts
-    except ClientError as e:
-        code = e.response["Error"]["Code"]
-        if code in ("ResourceNotFoundException", "AccessDeniedException"):
-            logger.warning("Secrets Manager unavailable (%s) — falling back to env var", code)
-        else:
-            raise
-
-    # 2. Fall back to ACCOUNT_NUMBERS env var
+    """Load account numbers from ACCOUNT_NUMBERS env var (comma-separated)."""
     raw = os.environ.get("ACCOUNT_NUMBERS", "")
     accounts = [a.strip() for a in raw.split(",") if a.strip()]
     if not accounts:
-        raise ValueError(
-            "No account numbers found. Set the Secrets Manager secret "
-            f"'{ACCOUNTS_SECRET_NAME}' or the ACCOUNT_NUMBERS env var."
-        )
+        raise ValueError("ACCOUNT_NUMBERS environment variable is not set or empty.")
     logger.info("Loaded %d accounts from ACCOUNT_NUMBERS env var", len(accounts))
     return accounts
 
