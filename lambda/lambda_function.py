@@ -155,7 +155,7 @@ def solve_captcha(page) -> str:
             ]}],
         }
         resp = bedrock.invoke_model(
-            modelId="us.anthropic.claude-3-haiku-20240307-v1:0",
+            modelId="us.anthropic.claude-haiku-4-5-20251001-v1:0",
             contentType="application/json", accept="application/json",
             body=_json.dumps(body),
         )
@@ -218,8 +218,8 @@ def fetch_bill_screenshot(page, account: str, out_path: Path, max_retries: int =
             time.sleep(1.5)
 
             body_text = page.inner_text("body").lower()
-            if "sorry" in body_text or "error while processing" in body_text:
-                logger.warning("Error page detected — wrong captcha, retrying")
+            if any(x in body_text for x in ("sorry", "error while processing", "wrong captcha", "invalid captcha")):
+                logger.warning("Wrong CAPTCHA or error page — retrying")
                 continue
 
             page.screenshot(path=str(out_path), full_page=True)
