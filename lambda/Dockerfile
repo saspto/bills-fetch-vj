@@ -1,7 +1,7 @@
 FROM public.ecr.aws/lambda/python:3.12
 
-# ── Layer 1: OS-level deps for Chromium and Tesseract ────────────────────────
-RUN dnf install -y --allowerasing \
+# ── Layer 1: OS-level deps for Chromium ──────────────────────────────────────
+RUN microdnf install -y \
     atk \
     cups-libs \
     libdrm \
@@ -14,9 +14,7 @@ RUN dnf install -y --allowerasing \
     libXrandr \
     libxkbcommon \
     at-spi2-atk \
-    tesseract \
-    tesseract-langpack-eng \
-    && dnf clean all
+    && microdnf clean all
 
 # ── Layer 2: Python dependencies ─────────────────────────────────────────────
 COPY requirements.txt .

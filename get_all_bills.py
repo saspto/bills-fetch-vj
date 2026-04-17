@@ -9,8 +9,8 @@ import re
 import time
 from pathlib import Path
 
-import pytesseract
-from PIL import Image, ImageFilter
+import ddddocr
+from PIL import Image
 from playwright.sync_api import sync_playwright
 
 URL = "https://payments.billdesk.com/MercOnline/CPDCLAPPGController"
@@ -27,20 +27,13 @@ def load_accounts() -> list[str]:
                          "export ACCOUNT_NUMBERS=1234,5678,9012")
     return accounts
 
-TESS_CONFIG = "--psm 8 --oem 3 -c tessedit_char_whitelist=0123456789"
+_ocr = ddddocr.DdddOcr(show_ad=False)
 
 
 def solve_captcha(page) -> str:
-    from io import BytesIO
     el = page.query_selector("img#jCaptchaImg") or page.query_selector("img[id*='Captcha']")
     img_bytes = el.screenshot() if el else page.screenshot()
-
-    img = Image.open(BytesIO(img_bytes)).convert("L")
-    img = img.resize((img.width * 2, img.height * 2), Image.LANCZOS)
-    img = img.filter(ImageFilter.SHARPEN)
-    img = img.point(lambda p: 255 if p > 128 else 0)
-
-    text = re.sub(r"\D", "", pytesseract.image_to_string(img, config=TESS_CONFIG).strip())
+    text = re.sub(r"\D", "", _ocr.classification(img_bytes))
     print(f"  CAPTCHA solved: {text!r}")
     return text
 
