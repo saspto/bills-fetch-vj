@@ -3,28 +3,32 @@ CPDCL bill fetcher — AWS Lambda handler.
 
 Navigates the BillDesk CPDCL portal for each account number, solves the
 numeric CAPTCHA with Tesseract OCR (free, no Bedrock needed), screenshots
-the bill details page, collates all three into an A4 PNG, and uploads
-everything to S3.
+the bill details page, collates all three into an A4 PNG, uploads to S3,
+and emails the collated image via SES.
 
 Environment variables:
   S3_BUCKET        (required) — destination bucket
+  EMAIL_TO         (required) — recipient address (must be SES-verified in sandbox)
+  EMAIL_FROM       (optional) — sender address, defaults to EMAIL_TO
   ACCOUNT_NUMBERS  (optional) — comma-separated, defaults to the three accounts
   S3_PREFIX        (optional) — key prefix, default "bills"
 """
 
-import base64
 import json
 import logging
 import os
 import re
-import subprocess
 import time
 from datetime import datetime
+from email.mime.image import MIMEImage
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from io import BytesIO
 from pathlib import Path
 
 import boto3
 import pytesseract
-from PIL import Image, ImageFilter, ImageOps
+from PIL import Image, ImageFilter
 from playwright.sync_api import sync_playwright
 
 logger = logging.getLogger()
@@ -34,9 +38,11 @@ URL = "https://payments.billdesk.com/MercOnline/CPDCLAPPGController"
 
 DEFAULT_ACCOUNTS = ["6423244002992", "6423244145358", "6423244217704"]
 
-S3_BUCKET = os.environ.get("S3_BUCKET", "")
-S3_PREFIX = os.environ.get("S3_PREFIX", "bills")
-ACCOUNTS = [a.strip() for a in os.environ.get("ACCOUNT_NUMBERS", ",".join(DEFAULT_ACCOUNTS)).split(",") if a.strip()]
+S3_BUCKET  = os.environ.get("S3_BUCKET", "")
+S3_PREFIX  = os.environ.get("S3_PREFIX", "bills")
+EMAIL_TO   = os.environ.get("EMAIL_TO", "")
+EMAIL_FROM = os.environ.get("EMAIL_FROM", "") or EMAIL_TO
+ACCOUNTS   = [a.strip() for a in os.environ.get("ACCOUNT_NUMBERS", ",".join(DEFAULT_ACCOUNTS)).split(",") if a.strip()]
 
 TMP = Path("/tmp")
 
@@ -180,6 +186,42 @@ def upload_to_s3(local_path: Path, s3_key: str) -> str:
     return s3_key
 
 
+# ── Email via SES ─────────────────────────────────────────────────────────────
+
+def send_email(image_path: Path, date_prefix: str, succeeded: list, failed: list):
+    if not EMAIL_TO:
+        logger.warning("EMAIL_TO not set — skipping email")
+        return
+
+    with open(image_path, "rb") as f:
+        img_data = f.read()
+
+    account_lines = "\n".join(f"  • {a}" for a in succeeded)
+    failed_lines  = (("\n\nFailed accounts:\n" + "\n".join(f"  • {a}" for a in failed)) if failed else "")
+
+    msg = MIMEMultipart("mixed")
+    msg["Subject"] = f"CPDCL Bill Details — {date_prefix}"
+    msg["From"]    = EMAIL_FROM
+    msg["To"]      = EMAIL_TO
+
+    msg.attach(MIMEText(
+        f"Please find attached the CPDCL bill details for {date_prefix}.\n\n"
+        f"Accounts fetched:\n{account_lines}{failed_lines}\n",
+        "plain",
+    ))
+
+    attachment = MIMEImage(img_data, name="cpdcl_bills.png")
+    attachment.add_header("Content-Disposition", "attachment", filename="cpdcl_bills.png")
+    msg.attach(attachment)
+
+    boto3.client("ses", region_name="us-east-1").send_raw_email(
+        Source=EMAIL_FROM,
+        Destinations=[EMAIL_TO],
+        RawMessage={"Data": msg.as_bytes()},
+    )
+    logger.info("Email sent to %s", EMAIL_TO)
+
+
 # ── Lambda handler ────────────────────────────────────────────────────────────
 
 def handler(event, context):
@@ -198,11 +240,11 @@ def handler(event, context):
             failed.append(account)
             logger.error("Failed to fetch bill for account %s", account)
 
+    collated = TMP / "receipt_all.png"
     if succeeded:
         paths = [TMP / f"bill_{a}.png" for a in succeeded]
 
         if len(paths) == 3:
-            collated = TMP / "receipt_all.png"
             collate_images(paths, collated)
             key = f"{S3_PREFIX}/{date_prefix}/receipt_all.png"
             uploaded.append(upload_to_s3(collated, key))
@@ -211,6 +253,9 @@ def handler(event, context):
             p = TMP / f"bill_{account}.png"
             key = f"{S3_PREFIX}/{date_prefix}/bill_{account}.png"
             uploaded.append(upload_to_s3(p, key))
+
+    if collated.exists():
+        send_email(collated, date_prefix, succeeded, failed)
 
     return {
         "statusCode": 200,

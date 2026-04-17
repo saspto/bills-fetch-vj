@@ -48,7 +48,27 @@ echo "Account: $AWS_ACCOUNT_ID  Region: $AWS_REGION"
 
 ---
 
-## Step 1 — Create S3 Bucket
+## Step 1 — Verify Email in SES
+
+The Lambda emails the collated bill image after every run. Both sender and
+recipient must be verified while SES is in sandbox mode.
+
+```bash
+aws ses verify-email-identity --email-address sas3d@yahoo.com --region us-east-1
+```
+
+Check your inbox for the verification link from AWS and click it. To confirm:
+```bash
+aws ses get-identity-verification-attributes --identities sas3d@yahoo.com --region us-east-1
+# "VerificationStatus": "Success"  ← you're good to go
+```
+
+> To send to *any* address (not just verified ones), request SES production
+> access: AWS Console → SES → Account dashboard → Request production access.
+
+---
+
+## Step 2 — Create S3 Bucket  
 
 ```bash
 export S3_BUCKET=bills-vja-$(echo $AWS_ACCOUNT_ID | tail -c 5)   # unique suffix
@@ -71,7 +91,7 @@ aws s3api put-bucket-lifecycle-configuration \
 
 ---
 
-## Step 2 — Create IAM Role for Lambda
+## Step 3 — Create IAM Role for Lambda
 
 ```bash
 # Trust policy
@@ -100,6 +120,12 @@ cat > /tmp/policy.json <<EOF
       "Effect": "Allow",
       "Action": ["s3:PutObject", "s3:GetObject"],
       "Resource": "arn:aws:s3:::${S3_BUCKET}/bills/*"
+    },
+    {
+      "Sid": "SesSend",
+      "Effect": "Allow",
+      "Action": "ses:SendRawEmail",
+      "Resource": "*"
     },
     {
       "Sid": "Logs",
@@ -162,7 +188,7 @@ aws lambda create-function \
   --timeout 600 \
   --memory-size 3008 \
   --region $AWS_REGION \
-  --environment "Variables={S3_BUCKET=$S3_BUCKET}"
+  --environment "Variables={S3_BUCKET=$S3_BUCKET,EMAIL_TO=sas3d@yahoo.com}"
 ```
 
 ### Optional environment variables
@@ -170,6 +196,8 @@ aws lambda create-function \
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `S3_BUCKET` | *(required)* | S3 bucket name |
+| `EMAIL_TO` | *(required)* | Recipient email address (must be SES-verified) |
+| `EMAIL_FROM` | same as `EMAIL_TO` | Sender address if different |
 | `S3_PREFIX` | `bills` | Key prefix inside the bucket |
 | `ACCOUNT_NUMBERS` | hardcoded 3 accounts | Comma-separated list to override |
 
