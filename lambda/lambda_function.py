@@ -290,10 +290,13 @@ def send_email(image_path: Path, date_prefix: str, succeeded: list, failed: list
     account_lines = "\n".join(f"  • {a}" for a in succeeded)
     failed_lines  = (("\n\nFailed accounts:\n" + "\n".join(f"  • {a}" for a in failed)) if failed else "")
 
+    run_date = datetime.utcnow().strftime("%Y-%m-%d")
+
     msg = MIMEMultipart("mixed")
-    msg["Subject"] = f"CPDCL Bill Details — {date_prefix}"
-    msg["From"]    = EMAIL_FROM
-    msg["To"]      = EMAIL_TO
+    msg["Subject"]  = f"Bills-vja as of {run_date}"
+    msg["From"]     = EMAIL_TO   # send from the verified address to itself
+    msg["To"]       = EMAIL_TO
+    msg["Reply-To"] = EMAIL_TO
 
     msg.attach(MIMEText(
         f"Please find attached the CPDCL bill details for {date_prefix}.\n\n"
